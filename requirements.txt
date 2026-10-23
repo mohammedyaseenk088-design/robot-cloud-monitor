@@ -1,0 +1,4 @@
+paho-mqtt>=2.0,<3.0
+streamlit
+ploty
+pandas
