@@ -1,5 +1,5 @@
-paho-mqtt>=2.0,<3.0
 streamlit
 streamlit-autorefresh
-ploty
+paho-mqtt==2.1.0
+plotly
 pandas
