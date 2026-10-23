@@ -1,59 +1,113 @@
-import sqlite3
+import json
+import queue
+import threading
+
 import pandas as pd
-import streamlit as st
 import plotly.express as px
+import paho.mqtt.client as mqtt
+import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
-DATABASE = "robot_data.db"
+BROKER = "test.mosquitto.org"
+PORT = 1883
+TOPIC = "robot_cloud_monitor/yaseen_demo_73921/telemetry"
 
 st.set_page_config(
     page_title="Robot Cloud Monitor",
     page_icon="🤖",
-    layout="wide"
+    layout="wide",
 )
 
 st.title("🤖 Wheeled Robot Monitoring Dashboard")
-st.caption("Real-time IoT telemetry monitoring")
-st_autorefresh(interval=2000, key="robot_refresh")
+st.caption("Live telemetry received through MQTT")
+
+# A thread-safe queue stores incoming MQTT messages.
+@st.cache_resource
+def get_mqtt_resources():
+    message_queue = queue.Queue(maxsize=500)
+
+    def on_connect(client, userdata, flags, reason_code, properties):
+        if reason_code == 0:
+            client.subscribe(TOPIC)
+
+    def on_message(client, userdata, msg):
+        try:
+            reading = json.loads(msg.payload.decode("utf-8"))
+            message_queue.put_nowait(reading)
+        except (ValueError, UnicodeDecodeError, queue.Full):
+            pass
+
+    client = mqtt.Client(
+        mqtt.CallbackAPIVersion.VERSION2,
+        client_id="cloud_dashboard_73921",
+    )
+    client.on_connect = on_connect
+    client.on_message = on_message
+    client.connect(BROKER, PORT, 60)
+    client.loop_start()
+
+    return message_queue, client
 
 
+try:
+    message_queue, mqtt_client = get_mqtt_resources()
+except Exception as error:
+    st.error(f"Could not connect to MQTT broker: {error}")
+    st.stop()
 
-@st.cache_data(ttl=1)
-def load_data():
-    connection = sqlite3.connect(DATABASE)
+if "readings" not in st.session_state:
+    st.session_state.readings = []
+
+# Move messages from the MQTT thread into Streamlit's session.
+while True:
     try:
-        df = pd.read_sql_query(
-            "SELECT * FROM telemetry ORDER BY id ASC",
-            connection
-        )
-    finally:
-        connection.close()
+        reading = message_queue.get_nowait()
+    except queue.Empty:
+        break
 
-    if not df.empty:
-        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    required = [
+        "timestamp",
+        "temperature",
+        "humidity",
+        "acceleration_x",
+        "acceleration_y",
+        "acceleration_z",
+        "angular_velocity_z",
+    ]
 
-    return df
+    if all(key in reading for key in required):
+        st.session_state.readings.append(reading)
 
+st.session_state.readings = st.session_state.readings[-200:]
 
-df = load_data()
+st_autorefresh(interval=2000, key="mqtt_refresh")
+
+if not st.session_state.readings:
+    st.info(
+        "Waiting for MQTT readings. Start mqtt_publisher.py "
+        "on your laptop and wait a few seconds."
+    )
+    st.stop()
+
+df = pd.DataFrame(st.session_state.readings)
+df["timestamp"] = pd.to_datetime(
+    df["timestamp"], utc=True, errors="coerce"
+)
+df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
 
 if df.empty:
-    st.warning("No telemetry data found. Start the MQTT publisher and database subscriber.")
+    st.warning("Waiting for valid timestamp readings.")
     st.stop()
 
 latest = df.iloc[-1]
 
-# Latest readings
-col1, col2, col3, col4 = st.columns(4)
-
-col1.metric("Temperature", f"{latest['temperature']:.2f} °C")
-col2.metric("Humidity", f"{latest['humidity']:.2f} %")
-col3.metric("Acceleration X", f"{latest['acceleration_x']:.3f} m/s²")
-col4.metric("Angular velocity Z", f"{latest['angular_velocity_z']:.3f} rad/s")
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Temperature", f"{latest['temperature']:.2f} °C")
+c2.metric("Humidity", f"{latest['humidity']:.2f} %")
+c3.metric("Acceleration X", f"{latest['acceleration_x']:.3f} m/s²")
+c4.metric("Angular Velocity Z", f"{latest['angular_velocity_z']:.3f} rad/s")
 
 st.divider()
-
-# Acceleration chart
 st.subheader("Acceleration Over Time")
 
 acceleration_df = df[
@@ -61,7 +115,7 @@ acceleration_df = df[
 ].melt(
     id_vars="timestamp",
     var_name="Axis",
-    value_name="Acceleration (m/s²)"
+    value_name="Acceleration (m/s²)",
 )
 
 fig_acc = px.line(
@@ -69,37 +123,33 @@ fig_acc = px.line(
     x="timestamp",
     y="Acceleration (m/s²)",
     color="Axis",
-    title="Accelerometer Readings"
 )
+st.plotly_chart(fig_acc, width="stretch")
 
-st.plotly_chart(fig_acc, use_container_width=True)
+left, right = st.columns(2)
 
-# Temperature and humidity charts
-col5, col6 = st.columns(2)
-
-with col5:
-    st.subheader("Temperature")
+with left:
     fig_temp = px.line(
         df,
         x="timestamp",
         y="temperature",
         title="Temperature Over Time",
-        labels={"temperature": "Temperature (°C)"}
+        labels={"temperature": "Temperature (°C)"},
     )
-    st.plotly_chart(fig_temp, use_container_width=True)
+    st.plotly_chart(fig_temp, width="stretch")
 
-with col6:
-    st.subheader("Humidity")
+with right:
     fig_humidity = px.line(
         df,
         x="timestamp",
         y="humidity",
         title="Humidity Over Time",
-        labels={"humidity": "Humidity (%)"}
+        labels={"humidity": "Humidity (%)"},
     )
-    st.plotly_chart(fig_humidity, use_container_width=True)
+    st.plotly_chart(fig_humidity, width="stretch")
 
 st.subheader("Recent Telemetry Records")
-st.dataframe(df.tail(20).sort_values("id", ascending=False), use_container_width=True)
-
-st.caption(f"Total readings stored: {len(df)}")
+st.dataframe(
+    df.tail(20).sort_values("timestamp", ascending=False),
+    width="stretch",
+)
