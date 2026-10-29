@@ -3,9 +3,10 @@ import random
 import time
 from datetime import datetime, timezone
 import paho.mqtt.client as mqtt
+import certifi
+BROKER = "broker.hivemq.com"
 
-BROKER = "test.mosquitto.org"
-PORT = 1883
+PORT = 8883
 TOPIC = "robot_cloud_monitor/yaseen_demo_73921/telemetry"
 
 
@@ -20,6 +21,7 @@ client = mqtt.Client(
     mqtt.CallbackAPIVersion.VERSION2,
     client_id="robot_simulator_73921"
 )
+client.tls_set(ca_certs=certifi.where())
 
 client.on_connect = on_connect
 
@@ -54,3 +56,4 @@ except KeyboardInterrupt:
 finally:
     client.loop_stop()
     client.disconnect()
+    
