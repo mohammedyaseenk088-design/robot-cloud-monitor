@@ -1,9 +1,10 @@
 import json
 import sqlite3
 import paho.mqtt.client as mqtt
+import certifi
 
-BROKER = "test.mosquitto.org"
-PORT = 1883
+BROKER = "broker.hivemq.com"
+PORT = 8883
 TOPIC = "robot_cloud_monitor/yaseen_demo_73921/telemetry"
 DATABASE = "robot_data.db"
 
@@ -65,6 +66,7 @@ client = mqtt.Client(
     mqtt.CallbackAPIVersion.VERSION2,
     client_id="database_subscriber_73921"
 )
+client.tls_set(ca_certs=certifi.where())
 
 client.on_connect = on_connect
 client.on_message = on_message
